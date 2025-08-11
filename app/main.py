@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 from app.schemas import *
-from app.inference import process_paint_inspection, get_model_status
+from app.inference import process_paint_inspection, get_model_status, process_ai_diagnosis
 
 app = FastAPI(
     title="Paint Defect Inspection Service",
@@ -31,6 +31,16 @@ async def health_check():
         service="paint-defect-inspection",
         model_loaded=model_status["model_loaded"]
     )
+
+# 이벤트 기반 AI 진단 처리 (메인 API)
+@app.post("/ai-service/diagnosis", response_model=AiDiagnosisCompletedEventDTO)
+async def process_ai_diagnosis_api(event: TestStartedEventDTO):
+    """TestStartedEvent를 받아 AI 진단 후 AiDiagnosisCompletedEvent 반환"""
+    try:
+        result = process_ai_diagnosis(event)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 도장면 검사 API (vehicleAudit에서 호출)
 @app.post("/paint-ai/inspect", response_model=PaintInspectionResponse)
