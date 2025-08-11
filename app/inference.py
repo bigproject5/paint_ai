@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from typing import List, Dict, Optional
 
+# 파일의 절대 경로를 얻기 위한 os 모듈 import
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -30,20 +31,35 @@ class PaintDefectDetector:
                 print("❌ YOLO를 사용할 수 없습니다")
                 return
             
-            # 모델 경로 우선순위
+            # 현재 파일의 절대 경로를 기준으로 모델 경로를 동적으로 생성합니다.
+            # 이 코드가 있는 폴더(app)의 상위 폴더(paint_ai)로 이동 후, models 폴더에 접근합니다.
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            model_abs_path = os.path.join(base_dir, '../models/best.onnx')
+
+            # 모델 경로 우선순위 (절대 경로를 최우선으로 시도)
             model_paths = [
+                model_abs_path,  # 새로 생성한 절대 경로
                 config.MODEL_PATH,
-                "runs_yolo11/car_defect_v2/weights/best.pt",
+                "../models/best.onnx",
                 "./models/best.pt",
                 "best.pt"
             ]
             
             for model_path in model_paths:
+                if not model_path:  # 경로가 비어있는 경우 스킵
+                    continue
                 try:
-                    self.model = YOLO(model_path)
-                    self.model_loaded = True
-                    print(f"✅ YOLO 모델 로드 완료: {model_path}")
-                    return
+                    # 파일 존재 여부 확인 후 로드 시도
+                    if os.path.exists(model_path):
+                        self.model = YOLO(model_path)
+                        self.model_loaded = True
+                        if config.DEBUG:
+                            print(f"✅ YOLO 모델 로드 완료: {model_path}")
+                        return
+                    else:
+                        if config.DEBUG:
+                            print(f"⚠️ {model_path} 파일이 존재하지 않습니다.")
+                        continue
                 except Exception as e:
                     if config.DEBUG:
                         print(f"⚠️ {model_path} 로드 실패: {e}")
@@ -152,7 +168,7 @@ class PaintDefectDetector:
             if config.DEBUG:
                 print(f"🔍 검출 완료: {len(defects)}개 결함 발견")
                 for defect in defects:
-                    print(f"  - {defect.defect_type.value}: {defect.confidence:.2f}")
+                    print(f"  - {defect.defect_type.value}: {defect.confidence:.2f}")
             
             return {
                 "defects": defects,
@@ -221,9 +237,9 @@ class PaintDefectDetector:
             
             # 결함 유형별 추가 차감
             if defect.defect_type == DefectType.PDR_DENT:
-                base_deduction *= 1.2  # PDR 덴트는 20% 더 차감
+                base_deduction *= 1.2   # PDR 덴트는 20% 더 차감
             elif defect.defect_type == DefectType.PAINT:
-                base_deduction *= 1.1  # 페인트 결함은 10% 더 차감
+                base_deduction *= 1.1   # 페인트 결함은 10% 더 차감
                 
             total_deduction += base_deduction
         
@@ -245,12 +261,12 @@ class PaintDefectDetector:
             return QualityGrade.REJECT  # 심각한 결함 3개 이상 → 불합격
         elif has_pdr_dent and critical_defects > 0:
             return QualityGrade.REJECT  # PDR 덴트 + 심각한 결함 → 불합격
-        elif quality_score < config.QUALITY_MINOR_THRESHOLD:  # < 0.6
+        elif quality_score < config.QUALITY_MINOR_THRESHOLD:   # < 0.6
             return QualityGrade.MAJOR_DEFECT
         elif quality_score < config.QUALITY_PASS_THRESHOLD:   # < 0.8
             return QualityGrade.MINOR_DEFECT
         elif has_pdr_dent:
-            return QualityGrade.MINOR_DEFECT  # PDR 덴트가 있으면 최소 경미한 결함
+            return QualityGrade.MINOR_DEFECT   # PDR 덴트가 있으면 최소 경미한 결함
         else:
             return QualityGrade.PASS
 
@@ -304,7 +320,7 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
             print(f"📊 결과: {result['overall_grade'].value} (점수: {result['quality_score']:.3f})")
             print(f"⚠️ 결함 여부: {result['is_defect']}, 발견된 결함: {len(result['defects'])}개")
             for i, defect in enumerate(result["defects"], 1):
-                print(f"  {i}. {defect.defect_type.value} - 신뢰도: {defect.confidence:.2f}, 심각도: {defect.severity:.2f}")
+                print(f"  {i}. {defect.defect_type.value} - 신뢰도: {defect.confidence:.2f}, 심각도: {defect.severity:.2f}")
         
         return completed_event
         
@@ -375,11 +391,15 @@ def save_diagnosis_result(result_data: dict, file_path: str):
 
 def get_model_status() -> dict:
     """모델 상태 조회"""
+    # config.MODEL_PATH가 None이거나 비어있을 경우를 대비해 안전하게 처리
+    model_path_str = str(config.MODEL_PATH) if config.MODEL_PATH else ""
+
     return {
         "model_loaded": detector.model_loaded,
         "yolo_available": YOLO_AVAILABLE,
-        "model_path": config.MODEL_PATH,
-        "confidence_threshold": config.CONFIDENCE_THRESHOLD
+        "model_path": model_path_str,
+        "confidence_threshold": config.CONFIDENCE_THRESHOLD,
+        "available": detector.model_loaded # 서버 호환성을 위해 available 키 추가
     }
 
 # 레거시 호환을 위한 함수 (기존 API와의 호환성 유지)
@@ -393,7 +413,7 @@ def process_paint_inspection(request: PaintInspectionRequest) -> PaintInspection
         response = PaintInspectionResponse(
             car_id=request.car_id,
             part_code=request.part_code,
-            overall_grade=result["overall_grade"],
+            overall_grade=result["overall_grade"].value,
             quality_score=result["quality_score"],
             defects_found=result["defects"],
             total_defects=len(result["defects"]),
