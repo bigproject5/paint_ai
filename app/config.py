@@ -6,7 +6,7 @@ class Config:
     API_PORT: int = int(os.getenv('API_PORT', 8000))
     
     # YOLO 모델 설정
-    MODEL_PATH: str = os.getenv('MODEL_PATH', 'runs_yolo11/car_defect_v2/weights/best.pt')
+    MODEL_PATH: str = os.getenv('MODEL_PATH', '../models/best.onnx')
     CONFIDENCE_THRESHOLD: float = float(os.getenv('CONFIDENCE_THRESHOLD', 0.25))
     
     # 이미지 처리 설정

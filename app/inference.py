@@ -2,9 +2,12 @@ import time
 import requests
 import cv2
 import numpy as np
+import json
+import os
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 
+# 파일의 절대 경로를 얻기 위한 os 모듈 import
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -28,20 +31,35 @@ class PaintDefectDetector:
                 print("❌ YOLO를 사용할 수 없습니다")
                 return
             
-            # 모델 경로 우선순위
+            # 현재 파일의 절대 경로를 기준으로 모델 경로를 동적으로 생성합니다.
+            # 이 코드가 있는 폴더(app)의 상위 폴더(paint_ai)로 이동 후, models 폴더에 접근합니다.
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            model_abs_path = os.path.join(base_dir, '../models/best.onnx')
+
+            # 모델 경로 우선순위 (절대 경로를 최우선으로 시도)
             model_paths = [
+                model_abs_path,  # 새로 생성한 절대 경로
                 config.MODEL_PATH,
-                "runs_yolo11/car_defect_v2/weights/best.pt",
+                "../models/best.onnx",
                 "./models/best.pt",
                 "best.pt"
             ]
             
             for model_path in model_paths:
+                if not model_path:  # 경로가 비어있는 경우 스킵
+                    continue
                 try:
-                    self.model = YOLO(model_path)
-                    self.model_loaded = True
-                    print(f"✅ YOLO 모델 로드 완료: {model_path}")
-                    return
+                    # 파일 존재 여부 확인 후 로드 시도
+                    if os.path.exists(model_path):
+                        self.model = YOLO(model_path)
+                        self.model_loaded = True
+                        if config.DEBUG:
+                            print(f"✅ YOLO 모델 로드 완료: {model_path}")
+                        return
+                    else:
+                        if config.DEBUG:
+                            print(f"⚠️ {model_path} 파일이 존재하지 않습니다.")
+                        continue
                 except Exception as e:
                     if config.DEBUG:
                         print(f"⚠️ {model_path} 로드 실패: {e}")
@@ -52,29 +70,38 @@ class PaintDefectDetector:
         except Exception as e:
             print(f"❌ 모델 로드 실패: {e}")
     
-    def download_image(self, image_url: str) -> np.ndarray:
-        """URL에서 이미지 다운로드"""
+    def download_image(self, image_path: str) -> np.ndarray:
+        """로컬 파일 또는 URL에서 이미지 로드"""
         try:
-            response = requests.get(image_url, timeout=config.DOWNLOAD_TIMEOUT)
-            response.raise_for_status()
-            
-            # 파일 크기 확인
-            if len(response.content) > config.MAX_IMAGE_SIZE:
-                raise Exception(f"이미지 크기가 너무 큽니다. 최대 {config.MAX_IMAGE_SIZE // (1024*1024)}MB")
-            
-            # 이미지 디코딩
-            image_array = np.frombuffer(response.content, np.uint8)
-            image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            # URL인지 로컬 파일인지 확인
+            if image_path.startswith(('http://', 'https://')):
+                # URL에서 이미지 다운로드
+                response = requests.get(image_path, timeout=config.DOWNLOAD_TIMEOUT)
+                response.raise_for_status()
+                
+                # 파일 크기 확인
+                if len(response.content) > config.MAX_IMAGE_SIZE:
+                    raise Exception(f"이미지 크기가 너무 큽니다. 최대 {config.MAX_IMAGE_SIZE // (1024*1024)}MB")
+                
+                # 이미지 디코딩
+                image_array = np.frombuffer(response.content, np.uint8)
+                image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+            else:
+                # 로컬 파일에서 이미지 로드
+                if not os.path.exists(image_path):
+                    raise Exception(f"이미지 파일을 찾을 수 없습니다: {image_path}")
+                
+                image = cv2.imread(image_path)
             
             if image is None:
-                raise Exception("이미지를 디코딩할 수 없습니다")
+                raise Exception("이미지를 로드할 수 없습니다")
                 
             return image
             
         except Exception as e:
-            raise Exception(f"이미지 다운로드 실패: {e}")
+            raise Exception(f"이미지 로드 실패: {e}")
     
-    def detect_defects(self, image_url: str) -> Dict:
+    def detect_defects(self, collect_data_path: str) -> Dict:
         """도장면 결함 검출"""
         if not self.model_loaded:
             raise Exception("YOLO 모델이 로드되지 않았습니다")
@@ -82,8 +109,8 @@ class PaintDefectDetector:
         start_time = time.time()
         
         try:
-            # 이미지 다운로드
-            image = self.download_image(image_url)
+            # 이미지 로드
+            image = self.download_image(collect_data_path)
             
             # YOLO 추론 실행
             results = self.model.predict(
@@ -135,16 +162,20 @@ class PaintDefectDetector:
             quality_score = self._calculate_quality_score(defects)
             overall_grade = self._determine_quality_grade(defects, quality_score)
             
+            # 결함 여부 판단 (결함이 있으면 True)
+            is_defect = len(defects) > 0
+            
             if config.DEBUG:
                 print(f"🔍 검출 완료: {len(defects)}개 결함 발견")
                 for defect in defects:
-                    print(f"  - {defect.defect_type.value}: {defect.confidence:.2f}")
+                    print(f"  - {defect.defect_type.value}: {defect.confidence:.2f}")
             
             return {
                 "defects": defects,
                 "quality_score": quality_score,
                 "overall_grade": overall_grade,
-                "processing_time": processing_time
+                "processing_time": processing_time,
+                "is_defect": is_defect
             }
             
         except Exception as e:
@@ -206,9 +237,9 @@ class PaintDefectDetector:
             
             # 결함 유형별 추가 차감
             if defect.defect_type == DefectType.PDR_DENT:
-                base_deduction *= 1.2  # PDR 덴트는 20% 더 차감
+                base_deduction *= 1.2   # PDR 덴트는 20% 더 차감
             elif defect.defect_type == DefectType.PAINT:
-                base_deduction *= 1.1  # 페인트 결함은 10% 더 차감
+                base_deduction *= 1.1   # 페인트 결함은 10% 더 차감
                 
             total_deduction += base_deduction
         
@@ -230,20 +261,150 @@ class PaintDefectDetector:
             return QualityGrade.REJECT  # 심각한 결함 3개 이상 → 불합격
         elif has_pdr_dent and critical_defects > 0:
             return QualityGrade.REJECT  # PDR 덴트 + 심각한 결함 → 불합격
-        elif quality_score < config.QUALITY_MINOR_THRESHOLD:  # < 0.6
+        elif quality_score < config.QUALITY_MINOR_THRESHOLD:   # < 0.6
             return QualityGrade.MAJOR_DEFECT
         elif quality_score < config.QUALITY_PASS_THRESHOLD:   # < 0.8
             return QualityGrade.MINOR_DEFECT
         elif has_pdr_dent:
-            return QualityGrade.MINOR_DEFECT  # PDR 덴트가 있으면 최소 경미한 결함
+            return QualityGrade.MINOR_DEFECT   # PDR 덴트가 있으면 최소 경미한 결함
         else:
             return QualityGrade.PASS
 
 # 전역 인스턴스
 detector = PaintDefectDetector()
 
+def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisCompletedEventDTO:
+    """AI 진단 처리 (TestStartedEvent를 받아 처리)"""
+    try:
+        # YOLO 모델로 결함 검출
+        result = detector.detect_defects(event_data.collect_data_path)
+        
+        # 진단 결과 JSON 생성
+        diagnosis_result = {
+            "overall_grade": result["overall_grade"].value,
+            "quality_score": result["quality_score"],
+            "defects_found": [
+                {
+                    "defect_type": defect.defect_type.value,
+                    "confidence": defect.confidence,
+                    "bbox": defect.bbox,
+                    "severity": defect.severity
+                }
+                for defect in result["defects"]
+            ],
+            "total_defects": len(result["defects"]),
+            "processing_time": result["processing_time"],
+            "inspection_date": datetime.now().isoformat()
+        }
+        
+        # 결과 파일 저장 경로 생성
+        result_data_path = generate_result_path(event_data.collect_data_path, event_data.inspection_id)
+        
+        # 결과를 파일로 저장
+        save_diagnosis_result(diagnosis_result, result_data_path)
+        
+        # AiDiagnosisCompletedEventDTO 생성
+        completed_event = AiDiagnosisCompletedEventDTO(
+            audit_id=event_data.audit_id,
+            inspection_id=event_data.inspection_id,
+            inspection_type=event_data.inspection_type,
+            is_defect=result["is_defect"],
+            collect_data_path=event_data.collect_data_path,
+            result_data_path=result_data_path,
+            diagnosis_result=json.dumps(diagnosis_result, ensure_ascii=False)
+        )
+        
+        # 디버그 정보 출력
+        if config.DEBUG:
+            print(f"🚗 AI 진단 완료: Audit ID {event_data.audit_id}, Inspection ID {event_data.inspection_id}")
+            print(f"📊 결과: {result['overall_grade'].value} (점수: {result['quality_score']:.3f})")
+            print(f"⚠️ 결함 여부: {result['is_defect']}, 발견된 결함: {len(result['defects'])}개")
+            for i, defect in enumerate(result["defects"], 1):
+                print(f"  {i}. {defect.defect_type.value} - 신뢰도: {defect.confidence:.2f}, 심각도: {defect.severity:.2f}")
+        
+        return completed_event
+        
+    except Exception as e:
+        print(f"❌ AI 진단 처리 실패: {e}")
+        # 에러 발생 시에도 완료 이벤트 생성 (실패 상태로)
+        error_result = {
+            "error": str(e),
+            "overall_grade": "error",
+            "quality_score": 0.0,
+            "defects_found": [],
+            "total_defects": 0,
+            "processing_time": 0.0,
+            "inspection_date": datetime.now().isoformat()
+        }
+        
+        result_data_path = generate_result_path(event_data.collect_data_path, event_data.inspection_id, error=True)
+        save_diagnosis_result(error_result, result_data_path)
+        
+        return AiDiagnosisCompletedEventDTO(
+            audit_id=event_data.audit_id,
+            inspection_id=event_data.inspection_id,
+            inspection_type=event_data.inspection_type,
+            is_defect=False,
+            collect_data_path=event_data.collect_data_path,
+            result_data_path=result_data_path,
+            diagnosis_result=json.dumps(error_result, ensure_ascii=False)
+        )
+
+def generate_result_path(collect_data_path: str, inspection_id: int, error: bool = False) -> str:
+    """결과 파일 저장 경로 생성"""
+    try:
+        # 원본 파일 경로에서 디렉토리와 파일명 분리
+        directory = os.path.dirname(collect_data_path)
+        filename = os.path.basename(collect_data_path)
+        name, ext = os.path.splitext(filename)
+        
+        # 결과 파일명 생성
+        if error:
+            result_filename = f"{name}_result_error_{inspection_id}.json"
+        else:
+            result_filename = f"{name}_result_{inspection_id}.json"
+        
+        # 결과 디렉토리 (results 하위 폴더)
+        result_directory = os.path.join(directory, "results")
+        os.makedirs(result_directory, exist_ok=True)
+        
+        return os.path.join(result_directory, result_filename)
+        
+    except Exception as e:
+        # 기본 경로 사용
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"./results/diagnosis_result_{inspection_id}_{timestamp}.json"
+
+def save_diagnosis_result(result_data: dict, file_path: str):
+    """진단 결과를 파일로 저장"""
+    try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, ensure_ascii=False, indent=2)
+            
+        print(f"✅ 진단 결과 저장 완료: {file_path}")
+        
+    except Exception as e:
+        print(f"❌ 결과 파일 저장 실패: {e}")
+        raise
+
+def get_model_status() -> dict:
+    """모델 상태 조회"""
+    # config.MODEL_PATH가 None이거나 비어있을 경우를 대비해 안전하게 처리
+    model_path_str = str(config.MODEL_PATH) if config.MODEL_PATH else ""
+
+    return {
+        "model_loaded": detector.model_loaded,
+        "yolo_available": YOLO_AVAILABLE,
+        "model_path": model_path_str,
+        "confidence_threshold": config.CONFIDENCE_THRESHOLD,
+        "available": detector.model_loaded # 서버 호환성을 위해 available 키 추가
+    }
+
+# 레거시 호환을 위한 함수 (기존 API와의 호환성 유지)
 def process_paint_inspection(request: PaintInspectionRequest) -> PaintInspectionResponse:
-    """도장면 검사 처리 (vehicleAudit에서 호출)"""
+    """도장면 검사 처리 (기존 API 호환용)"""
     try:
         # YOLO 모델로 결함 검출
         result = detector.detect_defects(request.image_url)
@@ -252,7 +413,7 @@ def process_paint_inspection(request: PaintInspectionRequest) -> PaintInspection
         response = PaintInspectionResponse(
             car_id=request.car_id,
             part_code=request.part_code,
-            overall_grade=result["overall_grade"],
+            overall_grade=result["overall_grade"].value,
             quality_score=result["quality_score"],
             defects_found=result["defects"],
             total_defects=len(result["defects"]),
@@ -260,25 +421,8 @@ def process_paint_inspection(request: PaintInspectionRequest) -> PaintInspection
             inspection_date=datetime.now()
         )
         
-        # 디버그 정보 출력
-        if config.DEBUG:
-            print(f"🚗 차량 검사 완료: {request.car_id} ({request.part_code})")
-            print(f"📊 결과: {response.overall_grade.value} (점수: {response.quality_score:.3f})")
-            print(f"⚠️ 발견된 결함: {response.total_defects}개")
-            for i, defect in enumerate(response.defects_found, 1):
-                print(f"  {i}. {defect.defect_type.value} - 신뢰도: {defect.confidence:.2f}, 심각도: {defect.severity:.2f}")
-        
         return response
         
     except Exception as e:
         print(f"❌ 검사 처리 실패: {e}")
         raise Exception(f"검사 처리 실패: {e}")
-
-def get_model_status() -> dict:
-    """모델 상태 조회"""
-    return {
-        "model_loaded": detector.model_loaded,
-        "yolo_available": YOLO_AVAILABLE,
-        "model_path": config.MODEL_PATH,
-        "confidence_threshold": config.CONFIDENCE_THRESHOLD
-    }
