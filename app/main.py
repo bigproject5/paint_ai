@@ -1,19 +1,25 @@
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-import uvicorn
-
+from pydantic import BaseModel
+import logging
+from datetime import datetime
+from app import inference
 from app.schemas import *
-from app.inference import process_paint_inspection, get_model_status, process_ai_diagnosis
+from app.config import config
+from app.kafka_producer import publish_diagnosis
+from app.kafka_consumer import start_background_consumer
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Paint Defect Inspection Service",
+    title="Paint AI Service",
+    description="도장면 결함 검출 서비스",
     version="1.0.0",
-    description="AI 기반 도장면 결함 검사 서비스",
     docs_url="/paint-ai/docs"
 )
 
-# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,57 +28,72 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 헬스체크
 @app.get("/paint-ai/health", response_model=HealthResponse)
 async def health_check():
-    model_status = get_model_status()
-    return HealthResponse(
-        status="healthy",
-        service="paint-defect-inspection",
-        model_loaded=model_status["model_loaded"]
-    )
+    try:
+        model_status = inference.get_model_status()
+        return HealthResponse(
+            status="healthy",
+            service="paint-defect-inspection",
+            model_loaded=model_status.get("model_loaded", False)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# 이벤트 기반 AI 진단 처리 (메인 API)
+@app.get("/paint-ai/model/status")
+async def get_model_status_endpoint():
+    try:
+        return inference.get_model_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ImageUrlRequest(BaseModel):
+    image_url: str
+
+class PaintInspectionRequest(BaseModel):
+    car_id: str
+    part_code: str
+    image_url: str
+    inspector_id: str
+
+@app.post("/paint-ai/detect")
+async def detect_defects_api(request: ImageUrlRequest):
+    try:
+        if not inference.detector.model_loaded:
+            raise HTTPException(status_code=503, detail="AI 모델이 아직 로드되지 않았습니다.")
+        
+        result = inference.detector.detect_defects(request.image_url)
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/ai-service/diagnosis", response_model=AiDiagnosisCompletedEventDTO)
 async def process_ai_diagnosis_api(event: TestStartedEventDTO):
-    """TestStartedEvent를 받아 AI 진단 후 AiDiagnosisCompletedEvent 반환"""
     try:
-        result = process_ai_diagnosis(event)
+        result = inference.process_ai_diagnosis(event)
+        
+        publish_diagnosis(
+            key_audit_id=event.audit_id,
+            payload=result.dict(by_alias=True, exclude_none=True),
+        )
+        
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 도장면 검사 API (vehicleAudit에서 호출)
 @app.post("/paint-ai/inspect", response_model=PaintInspectionResponse)
 async def inspect_paint_surface(request: PaintInspectionRequest):
-    """도장면 결함 검사 - vehicleAudit 연동용"""
     try:
-        result = process_paint_inspection(request)
+        result = inference.process_paint_inspection(request)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 모델 상태 확인
-@app.get("/paint-ai/model/status")
-async def get_model_status_api():
-    """AI 모델 상태 확인"""
-    status = get_model_status()
-    return {
-        "model_loaded": status["model_loaded"],
-        "yolo_available": status["available"],
-        "message": "모델이 정상적으로 로드되었습니다" if status["model_loaded"] else "모델 로드 실패"
-    }
-
-# 전역 예외 처리
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": str(exc),
-            "message": "서버 내부 오류가 발생했습니다"
-        }
-    )
+@app.on_event("startup")
+def startup_event():
+    start_background_consumer()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)
