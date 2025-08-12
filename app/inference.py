@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from typing import List, Dict, Optional
 
+# 파일의 절대 경로를 얻기 위한 os 모듈 import
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
@@ -33,6 +34,7 @@ class PaintDefectDetector:
             model_paths = [
                 model_abs_path,
                 config.MODEL_PATH,
+                "../models/best.onnx",
                 "../models/best.onnx",
                 "./models/best.pt",
                 "best.pt"
@@ -314,7 +316,7 @@ def process_paint_inspection(request: PaintInspectionRequest) -> PaintInspection
         response = PaintInspectionResponse(
             car_id=request.car_id,
             part_code=request.part_code,
-            overall_grade=result["overall_grade"],
+            overall_grade=result["overall_grade"].value,
             quality_score=result["quality_score"],
             defects_found=result["defects"],
             total_defects=len(result["defects"]),

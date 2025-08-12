@@ -1,4 +1,5 @@
 import uvicorn
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -14,6 +15,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
+    title="Paint AI Service",
+    description="도장면 결함 검출 서비스",
     title="Paint AI Service",
     description="도장면 결함 검출 서비스",
     version="1.0.0",
@@ -81,13 +84,17 @@ async def process_ai_diagnosis_api(event: TestStartedEventDTO):
         
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"모델 상태 확인 중 오류 발생: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e), "message": "서버 내부 오류가 발생했습니다"})
 
 @app.post("/paint-ai/inspect", response_model=PaintInspectionResponse)
 async def inspect_paint_surface(request: PaintInspectionRequest):
     try:
         result = inference.process_paint_inspection(request)
         return result
+    except HTTPException as e:
+        # FastAPI HTTPException은 그대로 전파
+        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
