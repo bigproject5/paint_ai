@@ -1,28 +1,20 @@
 import os
 
-class Config:
-    # API 설정
-    API_HOST: str = os.getenv('API_HOST', '0.0.0.0')
-    API_PORT: int = int(os.getenv('API_PORT', 8000))
-    
-    # YOLO 모델 설정
-    MODEL_PATH: str = os.getenv('MODEL_PATH', 'runs_yolo11/car_defect_v2/weights/best.pt')
-    CONFIDENCE_THRESHOLD: float = float(os.getenv('CONFIDENCE_THRESHOLD', 0.25))
-    
-    # 이미지 처리 설정
-    MAX_IMAGE_SIZE: int = int(os.getenv('MAX_IMAGE_SIZE', 10485760))  # 10MB
-    DOWNLOAD_TIMEOUT: int = int(os.getenv('DOWNLOAD_TIMEOUT', 10))  # 10초
-    
-    # 품질 등급 임계값
-    QUALITY_PASS_THRESHOLD: float = float(os.getenv('QUALITY_PASS_THRESHOLD', 0.8))
-    QUALITY_MINOR_THRESHOLD: float = float(os.getenv('QUALITY_MINOR_THRESHOLD', 0.6))
-    CRITICAL_SEVERITY_THRESHOLD: float = float(os.getenv('CRITICAL_SEVERITY_THRESHOLD', 0.7))
-    
-    # 로그 설정
-    LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
-    
-    # 디버그 모드
-    DEBUG: bool = os.getenv('DEBUG', 'false').lower() == 'true'
+# === 기본 서버 설정 ===
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", 8000))
+USE_DUMMY = os.getenv("USE_DUMMY", "true").lower() == "true"
 
-# 싱글톤 설정 객체
-config = Config()
+# vehicle-audit HTTP 전송용 (안 쓰면 기본값)
+VEHICLE_AUDIT_URL = os.getenv("VEHICLE_AUDIT_URL", "http://localhost:8080/audit")
+VEHICLE_AUDIT_API_KEY = os.getenv("VEHICLE_AUDIT_API_KEY", "")
+VEHICLE_AUDIT_TIMEOUT = int(os.getenv("VEHICLE_AUDIT_TIMEOUT", 5))
+
+# === Kafka 설정 ===
+KAFKA_ENABLED: bool = os.getenv("KAFKA_ENABLED", "true").lower() == "true"
+KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_CLIENT_ID: str = os.getenv("KAFKA_CLIENT_ID", "paint-ai")
+KAFKA_TOPIC_AI_COMPLETED: str = os.getenv("KAFKA_TOPIC_AI_COMPLETED", "ai.diagnosis.completed")
+
+# 결과 저장 경로(예: 리포트 파일/URL prefix)
+RESULT_BASE_URL: str = os.getenv("RESULT_BASE_URL", "https://result.example.com/")
