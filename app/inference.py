@@ -14,8 +14,8 @@ try:
 except ImportError:
     YOLO_AVAILABLE = False
 
-from app.schemas import *
-from app.config import config
+from schemas import *
+from config import config
 
 class PaintDefectDetector:
     def __init__(self):

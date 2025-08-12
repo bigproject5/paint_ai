@@ -1,22 +1,19 @@
 import uvicorn
-import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
 from datetime import datetime
-from app import inference
-from app.schemas import *
-from app.config import config
-from app.kafka_producer import publish_diagnosis
-from app.kafka_consumer import start_background_consumer
+import inference
+from schemas import *
+from config import config
+from kafka_producer import publish_diagnosis
+from kafka_consumer import start_background_consumer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Paint AI Service",
-    description="도장면 결함 검출 서비스",
     title="Paint AI Service",
     description="도장면 결함 검출 서비스",
     version="1.0.0",
