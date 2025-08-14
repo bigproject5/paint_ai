@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -15,27 +15,23 @@ class QualityGrade(str, Enum):
     REJECT = "reject"
 
 class TestStartedEventDTO(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
     audit_id: int = Field(..., alias="auditId")
     model: str
     line_code: str = Field(..., alias="lineCode")
     inspection_id: int = Field(..., alias="inspectionId")
     inspection_type: str = Field(..., alias="inspectionType")
     collect_data_path: str = Field(..., alias="collectDataPath")
-    
-    class Config:
-        allow_population_by_field_name = True
 
 class AiDiagnosisCompletedEventDTO(BaseModel):
-    audit_id: int = Field(..., alias="auditId")
-    inspection_id: int = Field(..., alias="inspectionId")
-    inspection_type: str = Field(..., alias="inspectionType")
-    is_defect: bool = Field(..., alias="isDefect")
-    collect_data_path: str = Field(..., alias="collectDataPath")
-    result_data_path: Optional[str] = Field(None, alias="resultDataPath")
-    diagnosis_result: str = Field(..., alias="diagnosisResult")
-    
-    class Config:
-        allow_population_by_field_name = True
+    audit_id: int
+    inspection_id: int
+    inspection_type: str
+    is_defect: bool
+    collect_data_path: str
+    result_data_path: Optional[str] = None
+    diagnosis_result: str
 
 class PaintInspectionRequest(BaseModel):
     car_id: str
