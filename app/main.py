@@ -4,6 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
 from datetime import datetime
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import inference
 from schemas import *
 from config import config

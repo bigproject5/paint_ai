@@ -233,7 +233,7 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
         save_diagnosis_result(diagnosis_result, result_data_path)
         
         completed_event = AiDiagnosisCompletedEventDTO(
-            audit_id=event_data.audit_id,
+            auditId=event_data.audit_id,
             inspection_id=event_data.inspection_id,
             inspection_type=event_data.inspection_type,
             is_defect=result["is_defect"],
