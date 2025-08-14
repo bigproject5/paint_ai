@@ -232,8 +232,9 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
         result_data_path = generate_result_path(event_data.collect_data_path, event_data.inspection_id)
         save_diagnosis_result(diagnosis_result, result_data_path)
         
+        # vehicleAudit 형식에 맞게 수정 (keyword arguments 사용)
         completed_event = AiDiagnosisCompletedEventDTO(
-            auditId=event_data.audit_id,
+            audit_id=event_data.audit_id,
             inspection_id=event_data.inspection_id,
             inspection_type=event_data.inspection_type,
             is_defect=result["is_defect"],
