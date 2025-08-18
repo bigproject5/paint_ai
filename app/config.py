@@ -4,7 +4,7 @@ class Config:
    API_HOST: str = os.getenv('API_HOST', '0.0.0.0')
    API_PORT: int = int(os.getenv('API_PORT', 8000))
    
-   MODEL_PATH: str = os.getenv('MODEL_PATH', '../models/best.onnx')
+   MODEL_PATH: str = os.getenv('MODEL_PATH', '../models/car_damage_model.onnx')
    CONFIDENCE_THRESHOLD: float = float(os.getenv('CONFIDENCE_THRESHOLD', 0.25))
    
    MAX_IMAGE_SIZE: int = int(os.getenv('MAX_IMAGE_SIZE', 10485760))
