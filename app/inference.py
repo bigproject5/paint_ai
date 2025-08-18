@@ -4,23 +4,93 @@ import cv2
 import numpy as np
 import json
 import os
+import boto3
 from datetime import datetime
 from typing import List, Dict, Optional
- 
-# 파일의 절대 경로를 얻기 위한 os 모듈 import
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
+
 try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
 except ImportError:
     YOLO_AVAILABLE = False
- 
+
 from schemas import *
 from config import config
- 
+
+class S3Uploader:
+    def __init__(self):
+        self.bucket_name = os.getenv('S3_BUCKET') or os.getenv('S3_BUCKET_NAME') or "aivle-5"
+        print(f"S3_BUCKET: {self.bucket_name}")
+        print(f"AWS_ACCESS_KEY_ID: {os.getenv('AWS_ACCESS_KEY_ID')}")
+        
+        self.s3_client = boto3.client(
+            's3',
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+            region_name=os.getenv('AWS_REGION', 'ap-northeast-2')
+        )
+    
+    def upload_defect_image(self, image: np.ndarray, inspection_id: int, defects: List[DetectedDefect]) -> Optional[str]:
+        try:
+            if not self.bucket_name:
+                return None
+                
+            # 결함 박스 그리기
+            annotated_image = self._draw_defect_boxes(image.copy(), defects)
+            
+            # 이미지 인코딩
+            _, buffer = cv2.imencode('.jpg', annotated_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            
+            # S3 업로드 경로 생성
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            s3_key = f"defect_images/{timestamp}/inspection_{inspection_id}_defects.jpg"
+            
+            # S3 업로드
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_key,
+                Body=buffer.tobytes(),
+                ContentType='image/jpeg'
+            )
+            
+            return f"s3://{self.bucket_name}/{s3_key}"
+            
+        except Exception:
+            return None
+    
+    def _draw_defect_boxes(self, image: np.ndarray, defects: List[DetectedDefect]) -> np.ndarray:
+        colors = {
+            DefectType.SCRATCH: (0, 255, 0),      # 초록색
+            DefectType.PDR_DENT: (0, 0, 255),    # 빨간색  
+            DefectType.PAINT: (255, 0, 0)        # 파란색
+        }
+        
+        for defect in defects:
+            bbox = defect.bbox
+            x1, y1 = int(bbox["x"]), int(bbox["y"])
+            x2, y2 = x1 + int(bbox["width"]), y1 + int(bbox["height"])
+            
+            color = colors.get(defect.defect_type, (255, 255, 255))
+            
+            # 박스 그리기
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+            
+            # 라벨 그리기
+            label = f"{defect.defect_type.value}: {defect.confidence:.2f}"
+            cv2.putText(image, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        return image
+
 class PaintDefectDetector:
     def __init__(self):
         self.model = None
         self.model_loaded = False
+        self.s3_uploader = S3Uploader()
         self._load_model()
    
     def _load_model(self):
@@ -29,30 +99,11 @@ class PaintDefectDetector:
                 return
            
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            model_abs_path = os.path.join(base_dir, '../models/car_damage_model.onnx')
- 
-            model_paths = [
-                model_abs_path,
-                config.MODEL_PATH,
-                "../models/best.onnx",
-                "../models/best.onnx",
-                "./models/best.pt",
-                "best.pt"
-            ]
+            model_path = os.path.join(base_dir, '../models/car_damage_model.onnx')
            
-            for model_path in model_paths:
-                if not model_path:
-                    continue
-                try:
-                    if os.path.exists(model_path):
-                        self.model = YOLO(model_path)
-                        self.model_loaded = True
-                        return
-                    else:
-                        continue
-                except Exception:
-                    continue
-               
+            if os.path.exists(model_path):
+                self.model = YOLO(model_path)
+                self.model_loaded = True
         except Exception:
             pass
    
@@ -81,7 +132,7 @@ class PaintDefectDetector:
         except Exception as e:
             raise Exception(f"이미지 로드 실패: {e}")
    
-    def detect_defects(self, collect_data_path: str) -> Dict:
+    def detect_defects(self, collect_data_path: str, inspection_id: int) -> Dict:
         if not self.model_loaded:
             raise Exception("YOLO 모델이 로드되지 않았습니다")
        
@@ -102,9 +153,16 @@ class PaintDefectDetector:
                 boxes = results[0].boxes
                
                 for box in boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    confidence = float(box.conf[0].cpu().numpy())
-                    class_id = int(box.cls[0].cpu().numpy())
+                    # 텐서를 numpy로 안전하게 변환
+                    try:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        confidence = float(box.conf[0].cpu().numpy())
+                        class_id = int(box.cls[0].cpu().numpy())
+                    except:
+                        # CPU에서 이미 numpy인 경우
+                        x1, y1, x2, y2 = box.xyxy[0].numpy() if hasattr(box.xyxy[0], 'numpy') else box.xyxy[0]
+                        confidence = float(box.conf[0].numpy() if hasattr(box.conf[0], 'numpy') else box.conf[0])
+                        class_id = int(box.cls[0].numpy() if hasattr(box.cls[0], 'numpy') else box.cls[0])
                    
                     class_name = self.model.names.get(class_id, f"unknown_class_{class_id}")
                     defect_type = self._map_class_to_defect_type(class_name)
@@ -129,13 +187,19 @@ class PaintDefectDetector:
             quality_score = self._calculate_quality_score(defects)
             overall_grade = self._determine_quality_grade(defects, quality_score)
             is_defect = len(defects) > 0
+            
+            # 결함이 발견된 경우 S3에 업로드
+            defect_image_path = None
+            if is_defect:
+                defect_image_path = self.s3_uploader.upload_defect_image(image, inspection_id, defects)
            
             return {
                 "defects": defects,
                 "quality_score": quality_score,
                 "overall_grade": overall_grade,
                 "processing_time": processing_time,
-                "is_defect": is_defect
+                "is_defect": is_defect,
+                "defect_image_path": defect_image_path
             }
            
         except Exception as e:
@@ -206,27 +270,31 @@ class PaintDefectDetector:
         elif has_pdr_dent:
             return QualityGrade.MINOR_DEFECT
         else:
-            return QualityGrade.MINOR_DEFECT  # 결함이 있으면 최소 MINOR_DEFECT
+            return QualityGrade.MINOR_DEFECT
 
 detector = PaintDefectDetector()
- 
+
 def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisCompletedEventDTO:
     try:
-        result = detector.detect_defects(event_data.collect_data_path)
+        result = detector.detect_defects(event_data.collect_data_path, event_data.inspection_id)
        
-        # 간소화된 결과
-        diagnosis_result = {
-            "grade": result["overall_grade"].value,
-            "score": round(result["quality_score"], 3),
-            "defect_count": len(result["defects"]),
-            "processing_time": round(result["processing_time"], 3)
-        }
+        # 결함 유형 목록 추출
+        defect_types = list(set([defect.defect_type.value for defect in result["defects"]]))
        
-        # 상세 결과는 파일에만 저장
-        detailed_result = {
-            "overall_grade": result["overall_grade"].value,
-            "quality_score": result["quality_score"],
-            "defects_found": [
+        # SimpleDiagnosisResult 구조로 변경
+        diagnosis_result = SimpleDiagnosisResult(
+            grade=result["overall_grade"].value,
+            score=round(result["quality_score"], 3),
+            defect_count=len(result["defects"]),
+            defect_types=defect_types,
+            processing_time=round(result["processing_time"], 3)
+        )
+       
+        # 상세 결과는 파일에 저장
+        detailed_result = DiagnosisResultDetail(
+            overall_grade=result["overall_grade"].value,
+            quality_score=result["quality_score"],
+            defects_found=[
                 {
                     "defect_type": defect.defect_type.value,
                     "confidence": defect.confidence,
@@ -235,13 +303,16 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
                 }
                 for defect in result["defects"]
             ],
-            "total_defects": len(result["defects"]),
-            "processing_time": result["processing_time"],
-            "inspection_date": datetime.now().isoformat()
-        }
+            total_defects=len(result["defects"]),
+            processing_time=result["processing_time"],
+            inspection_date=datetime.now().isoformat()
+        )
        
-        result_data_path = generate_result_path(event_data.collect_data_path, event_data.inspection_id)
-        save_diagnosis_result(detailed_result, result_data_path)  # 상세 결과는 파일에 저장
+        # 결함이 있으면 S3 경로를, 없으면 None
+        if result["is_defect"] and result.get("defect_image_path"):
+            result_data_path = result["defect_image_path"]  # S3 경로
+        else:
+            result_data_path = None
        
         completed_event = AiDiagnosisCompletedEventDTO(
             audit_id=event_data.audit_id,
@@ -250,20 +321,21 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
             is_defect=result["is_defect"],
             collect_data_path=event_data.collect_data_path,
             result_data_path=result_data_path,
-            diagnosis_result=json.dumps(diagnosis_result, ensure_ascii=False)  # 간소화된 결과만
+            diagnosis_result=diagnosis_result.model_dump_json()
         )
        
         return completed_event
        
     except Exception as e:
-        error_result = {
-            "grade": "error",
-            "score": 0.0,
-            "defect_count": 0,
-            "error": str(e)
-        }
+        error_result = SimpleDiagnosisResult(
+            grade="error",
+            score=0.0,
+            defect_count=0,
+            defect_types=[],
+            processing_time=0.0,
+            error=str(e)
+        )
        
-        # 에러 부분도 동일하게 간소화
         return AiDiagnosisCompletedEventDTO(
             audit_id=event_data.audit_id,
             inspection_id=event_data.inspection_id,
@@ -271,8 +343,9 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
             is_defect=False,
             collect_data_path=event_data.collect_data_path,
             result_data_path=None,
-            diagnosis_result=json.dumps(error_result, ensure_ascii=False)
+            diagnosis_result=error_result.model_dump_json()
         )
+
 def generate_result_path(collect_data_path: str, inspection_id: int, error: bool = False) -> str:
     try:
         directory = os.path.dirname(collect_data_path)
@@ -292,7 +365,7 @@ def generate_result_path(collect_data_path: str, inspection_id: int, error: bool
     except Exception:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"./results/diagnosis_result_{inspection_id}_{timestamp}.json"
- 
+
 def save_diagnosis_result(result_data: dict, file_path: str):
     try:
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -302,10 +375,10 @@ def save_diagnosis_result(result_data: dict, file_path: str):
            
     except Exception as e:
         raise
- 
+
 def get_model_status() -> dict:
     model_path_str = str(config.MODEL_PATH) if config.MODEL_PATH else ""
- 
+
     return {
         "model_loaded": detector.model_loaded,
         "yolo_available": YOLO_AVAILABLE,
@@ -313,15 +386,17 @@ def get_model_status() -> dict:
         "confidence_threshold": config.CONFIDENCE_THRESHOLD,
         "available": detector.model_loaded
     }
- 
+
 def process_paint_inspection(request: PaintInspectionRequest) -> PaintInspectionResponse:
     try:
-        result = detector.detect_defects(request.image_url)
+        # inspection_id 없이 호출하므로 임시 ID 생성
+        temp_inspection_id = int(time.time())
+        result = detector.detect_defects(request.image_url, temp_inspection_id)
        
         response = PaintInspectionResponse(
             car_id=request.car_id,
             part_code=request.part_code,
-            overall_grade=result["overall_grade"].value,
+            overall_grade=result["overall_grade"],
             quality_score=result["quality_score"],
             defects_found=result["defects"],
             total_defects=len(result["defects"]),

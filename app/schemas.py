@@ -37,6 +37,8 @@ class SimpleDiagnosisResult(BaseModel):
     grade: str
     score: float
     defect_count: int
+    defect_types: List[str]  
+    processing_time: float
     error: Optional[str] = None
 
 class PaintInspectionRequest(BaseModel):
