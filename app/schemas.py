@@ -33,6 +33,12 @@ class AiDiagnosisCompletedEventDTO(BaseModel):
     result_data_path: Optional[str] = None
     diagnosis_result: str
 
+class SimpleDiagnosisResult(BaseModel):
+    grade: str
+    score: float
+    defect_count: int
+    error: Optional[str] = None
+
 class PaintInspectionRequest(BaseModel):
     car_id: str
     part_code: str

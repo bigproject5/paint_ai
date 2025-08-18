@@ -29,7 +29,7 @@ class PaintDefectDetector:
                 return
            
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            model_abs_path = os.path.join(base_dir, '../models/best.onnx')
+            model_abs_path = os.path.join(base_dir, '../models/car_damage_model.onnx')
  
             model_paths = [
                 model_abs_path,
@@ -192,8 +192,10 @@ class PaintDefectDetector:
     def _determine_quality_grade(self, defects: List[DetectedDefect], quality_score: float) -> QualityGrade:
         critical_defects = sum(1 for d in defects if d.severity > config.CRITICAL_SEVERITY_THRESHOLD)
         has_pdr_dent = any(d.defect_type == DefectType.PDR_DENT for d in defects)
-       
-        if critical_defects > 2:
+  
+        if len(defects) == 0:
+            return QualityGrade.PASS
+        elif critical_defects > 2:
             return QualityGrade.REJECT
         elif has_pdr_dent and critical_defects > 0:
             return QualityGrade.REJECT
@@ -204,15 +206,24 @@ class PaintDefectDetector:
         elif has_pdr_dent:
             return QualityGrade.MINOR_DEFECT
         else:
-            return QualityGrade.PASS
- 
+            return QualityGrade.MINOR_DEFECT  # 결함이 있으면 최소 MINOR_DEFECT
+
 detector = PaintDefectDetector()
  
 def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisCompletedEventDTO:
     try:
         result = detector.detect_defects(event_data.collect_data_path)
        
+        # 간소화된 결과
         diagnosis_result = {
+            "grade": result["overall_grade"].value,
+            "score": round(result["quality_score"], 3),
+            "defect_count": len(result["defects"]),
+            "processing_time": round(result["processing_time"], 3)
+        }
+       
+        # 상세 결과는 파일에만 저장
+        detailed_result = {
             "overall_grade": result["overall_grade"].value,
             "quality_score": result["quality_score"],
             "defects_found": [
@@ -230,44 +241,38 @@ def process_ai_diagnosis(event_data: TestStartedEventDTO) -> AiDiagnosisComplete
         }
        
         result_data_path = generate_result_path(event_data.collect_data_path, event_data.inspection_id)
-        save_diagnosis_result(diagnosis_result, result_data_path)
+        save_diagnosis_result(detailed_result, result_data_path)  # 상세 결과는 파일에 저장
        
         completed_event = AiDiagnosisCompletedEventDTO(
-            auditId=event_data.audit_id,
+            audit_id=event_data.audit_id,
             inspection_id=event_data.inspection_id,
             inspection_type=event_data.inspection_type,
             is_defect=result["is_defect"],
             collect_data_path=event_data.collect_data_path,
             result_data_path=result_data_path,
-            diagnosis_result=json.dumps(diagnosis_result, ensure_ascii=False)
+            diagnosis_result=json.dumps(diagnosis_result, ensure_ascii=False)  # 간소화된 결과만
         )
        
         return completed_event
        
     except Exception as e:
         error_result = {
-            "error": str(e),
-            "overall_grade": "error",
-            "quality_score": 0.0,
-            "defects_found": [],
-            "total_defects": 0,
-            "processing_time": 0.0,
-            "inspection_date": datetime.now().isoformat()
+            "grade": "error",
+            "score": 0.0,
+            "defect_count": 0,
+            "error": str(e)
         }
        
-        result_data_path = generate_result_path(event_data.collect_data_path, event_data.inspection_id, error=True)
-        save_diagnosis_result(error_result, result_data_path)
-       
+        # 에러 부분도 동일하게 간소화
         return AiDiagnosisCompletedEventDTO(
             audit_id=event_data.audit_id,
             inspection_id=event_data.inspection_id,
             inspection_type=event_data.inspection_type,
             is_defect=False,
             collect_data_path=event_data.collect_data_path,
-            result_data_path=result_data_path,
+            result_data_path=None,
             diagnosis_result=json.dumps(error_result, ensure_ascii=False)
         )
- 
 def generate_result_path(collect_data_path: str, inspection_id: int, error: bool = False) -> str:
     try:
         directory = os.path.dirname(collect_data_path)
